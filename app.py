@@ -2,12 +2,12 @@ from flask import Flask, request, jsonify
 import logging
 import psycopg2
 import os
-import json
 from datetime import datetime
 
 app = Flask(__name__)
 logging.basicConfig(level=logging.INFO)
 
+# PostgreSQL config from environment variables
 DB_CONFIG = {
     'dbname': os.getenv('DB_NAME', 'your_db'),
     'user': os.getenv('DB_USER', 'your_user'),
@@ -27,9 +27,17 @@ def webhook():
         analysis = call_data.get("analysis", {})
         collected = analysis.get("data_collection_results", {})
         phone_meta = metadata.get("phone_call", {})
+        transcript = call_data.get("transcript", [])
 
         def safe_get(key):
             return collected.get(key, {}).get("value")
+
+        # Detect voicemail: look for standard voicemail phrases
+        voicemail = False
+        for entry in transcript:
+            if entry.get("role") == "user" and "please record your message" in (entry.get("message") or "").lower():
+                voicemail = True
+                break
 
         values = {
             "conversation_id": call_data.get("conversation_id"),
@@ -48,10 +56,11 @@ def webhook():
             "call_duration_secs": metadata.get("call_duration_secs"),
             "call_sid": phone_meta.get("call_sid"),
             "external_number": phone_meta.get("external_number"),
-            "agent_number": phone_meta.get("agent_number")
+            "agent_number": phone_meta.get("agent_number"),
+            "voicemail": voicemail
         }
 
-        logging.info("📤 Extracted data: %s", values)
+        logging.info("📤 Parsed data (voicemail: %s): %s", voicemail, values)
         insert_into_db(values)
         return jsonify({"status": "success"}), 200
 
@@ -68,12 +77,12 @@ def insert_into_db(values):
                         conversation_id, agent_id, zip_code, age, household_size, income,
                         insurance, life_change, qualified, willing_to_talk, first_name,
                         phone_number, call_successful, call_duration_secs, call_sid,
-                        external_number, agent_number
+                        external_number, agent_number, voicemail
                     ) VALUES (
                         %(conversation_id)s, %(agent_id)s, %(zip_code)s, %(age)s, %(household_size)s,
                         %(income)s, %(insurance)s, %(life_change)s, %(qualified)s, %(willing_to_talk)s,
                         %(first_name)s, %(phone_number)s, %(call_successful)s, %(call_duration_secs)s,
-                        %(call_sid)s, %(external_number)s, %(agent_number)s
+                        %(call_sid)s, %(external_number)s, %(agent_number)s, %(voicemail)s
                     )
                 """, values)
             conn.commit()
